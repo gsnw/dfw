@@ -1,0 +1,885 @@
+#!/bin/sh
+
+#################################
+# Copyright (c) 2005 by gsnw.de	#
+# German Service Network	#
+# support {at} gsnw.de		#
+# License: GPL (Public)		#
+#################################
+
+###############################################################
+# Distribution-specific variables (alter if necessary)
+###############################################################
+
+IPTABLES='/sbin/iptables'
+CONFIGFILE=/etc/network/dfw.conf
+TMP=/tmp/dfw$$
+
+###############################################################
+#                Beginning of Firewall-Script                 #
+#-------------------------------------------------------------#
+#   ! - ! - ! Don't change anything from here on ! - ! - !    #
+###############################################################
+
+###############################################################
+# initial setup of variables
+###############################################################
+
+INTIF=""
+EXTIF=""
+DYNIP=""
+INPUT_FILTERING="false"
+OUTPUT_FILTERING="false"
+FORWARD_FILTERING="false"
+ROUTING="false"
+INTERNAL_POLICY="light"
+INTERNAL_ICMP="allow"
+EXTERNAL_POLICY="light"
+EXTERNAL_ICMP="allow"
+FORWARD_POLICY="light"
+
+declare -a MODULES
+MODULESENTRIES=0
+
+declare -a NATTABLE
+NATENTRIES=0
+
+declare -a INTERNALALLOWTCP
+INTERNALALLOWTCPENTRIES=0
+
+declare -a INTERNALALLOWUDP
+INTERNALALLOWUDPENTRIES=0
+
+declare -a INTERNALDENYTCP
+INTERNALDENYTCPENTRIES=0
+
+declare -a INTERNALDENYUDP
+INTERNALDENYUDPENTRIES=0
+
+declare -a INTERNALREJECTCP
+INTERNALREJECTTCPENTRIES=0
+
+declare -a INTERNALREJECTUDP
+INTERNALREJECTUDPENTRIES=0
+
+declare -a EXTERNALALLOWTCP
+EXTERNALALLOWTCPENTRIES=0
+
+declare -a EXTERNALALLOWUDP
+EXTERNALALLOWUDPENTRIES=0
+
+declare -a EXTERNALDENYTCP
+EXTERNALDENYTCPENTRIES=0
+
+declare -a EXTERNALDENYUDP
+EXTERNALDENYUDPENTRIES=0
+
+declare -a EXTERNALREJECTTCP
+EXTERNALREJECTTCPENTRIES=0
+
+declare -a EXTERNALREJECTUDP
+EXTERNALREJECTUDPENTRIES=0
+
+declare -a FORWARDALLOWTCP
+FORWARDALLOWTCPENTRIES=0
+
+declare -a FORWARDALLOWUDP
+FORWARDALLOWUDPENTRIES=0
+
+declare -a FORWARDDENYTCP
+FORWARDDENYTCPENTRIES=0
+
+declare -a FORWARDDENYUDP
+FORWARDDENYUDPENTRIES=0
+
+declare -a FORWARDREJECTTCP
+FORWARDREJECTTCPENTRIES=0
+
+declare -a FORWARDREJECTUDP
+FORWARDREJECTUDPENTRIES=0
+
+###############################################################
+# Internally used functions
+###############################################################
+
+#
+# Load configuration file and test directives
+#
+
+load_config() {
+  #
+  # Load configuration file
+  #
+  
+  sed -e 's/#.*//' -e '/^[ ]*$/d' $CONFIGFILE > $TMP 2> /dev/null
+  if [ $? -ne 0 ]; then echo "ERROR: $CONFIGFILE not found"; return 1; fi
+
+  while read command options
+  do
+    set -- $options
+    case $command in
+      internal-interface)
+        INTIF="$1"
+        ;;
+      external-interface)
+        EXTIF="$1"
+        ;;
+      dynamic-ip)
+        DYNIP="$1"
+        ;;
+      input-filtering)
+        INPUT_FILTERING="$1"
+        ;;
+      output-filtering)
+        OUTPUT_FILTERING="$1"
+        ;;
+      forward-filtering)
+        FORWARD_FILTERING="$1"
+        ;;
+      routing)
+        ROUTING="$1"
+        ;;
+      internal-policy)
+        INTERNAL_POLICY="$1"
+        ;;
+      internal-icmp)
+        INTERNAL_ICMP="$1"
+	;;
+      internal-allow-tcp)
+        for port in $options
+	do
+          INTERNALALLOWTCP[INTERNALALLOWTCPENTRIES]="$port"
+  	  let "INTERNALALLOWTCPENTRIES += 1"
+	done
+        ;;
+      internal-allow-udp)
+        for port in $options
+	do
+          INTERNALALLOWUDP[INTERNALALLOWUDPENTRIES]="$port"
+  	  let "INTERNALALLOWUDPENTRIES += 1"
+	done
+        ;;
+      internal-deny-tcp)
+        for port in $options
+	do
+          INTERNALDENYTCP[INTERNALDENYTCPENTRIES]="$port"
+  	  let "INTERNALDENYTCPENTRIES += 1"
+	done
+        ;;
+      internal-deny-udp)
+        for port in $options
+	do
+          INTERNALDENYUDP[INTERNALDENYUDPENTRIES]="$port"
+  	  let "INTERNALDENYUDPENTRIES += 1"
+	done
+        ;;
+      internal-reject-tcp)
+        for port in $options
+	do
+          INTERNALREJECTTCP[INTERNALREJECTTCPENTRIES]="$port"
+  	  let "INTERNALREJECTTCPENTRIES += 1"
+	done
+        ;;
+      internal-reject-udp)
+        for port in $options
+	do
+          INTERNALREJECTUDP[INTERNALREJECTUDPENTRIES]="$port"
+  	  let "INTERNALREJECTUDPENTRIES += 1"
+	done
+        ;;
+      external-policy)
+        EXTERNAL_POLICY="$1"
+        ;;
+      external-icmp)
+        EXTERNAL_ICMP="$1"
+	;;
+      external-allow-tcp)
+        for port in $options
+	do
+          EXTERNALALLOWTCP[EXTERNALALLOWTCPENTRIES]="$port"
+	  let "EXTERNALALLOWTCPENTRIES += 1"
+	done
+        ;;
+      external-allow-udp)
+        for port in $options
+	do
+          EXTERNALALLOWUDP[EXTERNALALLOWUDPENTRIES]="$port"
+	  let "EXTERNALALLOWUDPENTRIES += 1"
+	done
+        ;;
+      external-deny-tcp)
+        for port in $options
+	do
+          EXTERNALDENYTCP[EXTERNALDENYTCPENTRIES]="$port"
+	  let "EXTERNALDENYTCPENTRIES += 1"
+	done
+        ;;
+      external-deny-udp)
+        for port in $options
+	do
+          EXTERNALDENYUDP[EXTERNALDENYUDPENTRIES]="$port"
+	  let "EXTERNALDENYUDPENTRIES += 1"
+	done
+        ;;
+      external-reject-tcp)
+        for port in $options
+	do
+          EXTERNALREJECTTCP[EXTERNALREJECTTCPENTRIES]="$port"
+	  let "EXTERNALREJECTTCPENTRIES += 1"
+	done
+        ;;
+      external-reject-udp)
+        for port in $options
+	do
+          EXTERNALREJECTUDP[EXTERNALREJECTUDPENTRIES]="$port"
+	  let "EXTERNALREJECTUDPENTRIES += 1"
+	done
+        ;;
+      forward-policy)
+        FORWARD_POLICY="$1"
+        ;;
+      forward-allow-tcp)
+        for port in $options
+	do
+          FORWARDALLOWTCP[FORWARDALLOWTCPENTRIES]="$port"
+	  let "FORWARDALLOWTCPENTRIES += 1"
+	done
+        ;;
+      forward-allow-udp)
+        for port in $options
+	do
+          FORWARDALLOWUDP[FORWARDALLOWUDPENTRIES]="$port"
+	  let "FORWARDALLOWUDPENTRIES += 1"
+	done
+        ;;
+      forward-deny-tcp)
+        for port in $options
+	do
+          FORWARDDENYTCP[FORWARDDENYTCPENTRIES]="$port"
+	  let "FORWARDDENYTCPENTRIES += 1"
+	done
+        ;;
+      forward-deny-udp)
+        for port in $options
+	do
+          FORWARDDENYUDP[FORWARDDENYUDPENTRIES]="$port"
+	  let "FORWARDDENYUDPENTRIES += 1"
+	done
+        ;;
+      forward-reject-tcp)
+        for port in $options
+	do
+          FORWARDREJECTTCP[FORWARDREJECTTCPENTRIES]="$port"
+	  let "FORWARDREJECTTCPENTRIES += 1"
+	done
+        ;;
+      forward-reject-udp)
+        for port in $options
+	do
+          FORWARDREJECTUDP[FORWARDREJECTUDPENTRIES]="$port"
+	  let "FORWARDREJECTUDPENTRIES += 1"
+	done
+        ;;
+      nat|portfw)
+        NATTABLE[NATENTRIES]="$options"
+        let "NATENTRIES += 1"
+        ;;
+      modules)
+        for module in $options
+	do
+	  MODULES[MODULESENTRIES]="$module"
+	  let "MODULESENTRIES += 1"
+	done
+	;;
+      loadmodule) 
+	MODULES[MODULESENTRIES]="$options"
+	let "MODULESENTRIES += 1"
+	;;  
+      *)
+        echo "Unknown command: $command"
+        ;;
+    esac
+  done < $TMP
+  
+  rm -f $TMP > /dev/null 2> /dev/null
+  
+  #
+  # Test configuration options
+  #
+  
+  if [ -z "$INTIF" -a -z "$EXTIF" ]; then echo "ERROR: You need to specify at least one interface."; return 1; fi
+  if [ ! "$DYNIP" = "true" -a ! "$DYNIP" = "false" ]; then echo "ERROR: dynamic-ip must be \"true\" or \"false\""; return 1; fi
+  if [ ! "$INPUT_FILTERING" = "true" -a ! "$INPUT_FILTERING" = "false" ]; then echo "ERROR: input-filtering must be \"true\" or \"false\""; return 1; fi
+  if [ ! "$OUTPUT_FILTERING" = "true" -a ! "$OUTPUT_FILTERING" = "false" ]; then echo "ERROR: output-filtering must be \"true\" or \"false\""; return 1; fi 
+  if [ ! "$FORWARD_FILTERING" = "true" -a ! "$FORWARD_FILTERING" = "false" ]; then echo "ERROR: forward-filtering must be \"true\" or \"false\""; return 1; fi
+  if [ ! "$ROUTING" = "true" -a ! "$ROUTING" = "false" ]; then echo "ERROR: routing must be \"true\" or \"false\""; return 1; fi
+ 
+  if [ "$ROUTING" = "true" -a \( -z "$INTIF" -o -z "$EXTIF" \) ]; then echo "ERROR: You need an internal AND an external interface for routing!"; return 1;fi
+  if [ "$NATENTRIES" -gt 0 -a "$ROUTING" = "false" ]; then echo "ERROR: You must enable routing for port forwarding"; return 1; fi
+
+  if [ ! "$INTERNAL_POLICY" = "light" -a ! "$INTERNAL_POLICY" = "medium" -a ! "$INTERNAL_POLICY" = "strong" ]; then echo "ERROR: internal-policy must be \"light\", \"medium\" or \"strong\""; return 1; fi
+  if [ ! "$EXTERNAL_POLICY" = "light" -a ! "$EXTERNAL_POLICY" = "medium" -a ! "$EXTERNAL_POLICY" = "strong" ]; then echo "ERROR: external-policy must be \"light\", \"medium\" or \"strong\""; return 1; fi
+  if [ ! "$FORWARD_POLICY" = "light" -a ! "$FORWARD_POLICY" = "medium" -a ! "$FORWARD_POLICY" = "strong" ]; then echo "ERROR: forward-policy must be \"light\", \"medium\" or \"strong\""; return 1; fi
+
+  if [ ! "$INTERNAL_ICMP" = "allow" -a ! "$INTERNAL_ICMP" = "deny" -a ! "$INTERNAL_ICMP" = "filter" ]; then echo "ERROR: internal-icmp must be \"allow\", \"deny\" or \"filter\""; return 1; fi 
+  if [ ! "$EXTERNAL_ICMP" = "allow" -a ! "$EXTERNAL_ICMP" = "deny" -a ! "$EXTERNAL_ICMP" = "filter" ]; then echo "ERROR: external-icmp must be \"allow\", \"deny\" or \"filter\""; return 1; fi
+}
+
+#
+# Reset ip tables
+#
+
+reset_tables() {
+  $IPTABLES -F
+  $IPTABLES -X
+
+  $IPTABLES -t nat -F
+  $IPTABLES -t nat -X
+
+  $IPTABLES -t mangle -F
+  $IPTABLES -t mangle -X
+
+  $IPTABLES -t nat -P PREROUTING ACCEPT
+  $IPTABLES -t nat -P POSTROUTING ACCEPT
+
+  $IPTABLES -t mangle -P PREROUTING ACCEPT
+  $IPTABLES -t mangle -P INPUT ACCEPT
+  $IPTABLES -t mangle -P FORWARD ACCEPT
+  $IPTABLES -t mangle -P OUTPUT ACCEPT
+  $IPTABLES -t mangle -P POSTROUTING ACCEPT
+}
+
+#
+# Forward a port(-range)
+#
+
+portfw() {
+  protos=$1
+  sport=$(echo $2 | awk '/^[0-9]+(\-[0-9]+)?$/ {split($1, ports, "-"); if (ports[2] != "") print ports[1] ":" ports[2]; else print ports[1]}')
+  daddr=$3
+  
+  case $protos in
+    tcp)
+      ;;
+    udp)
+      ;;
+    both)
+      protos="tcp udp"
+      ;;
+    *)
+      error="Protocol must be tcp, udp or both"
+      return 1
+  esac
+  
+  if [ -z "$sport" ]; then error="null or invalid source port"; return 1; fi
+  if [ -z "$daddr" ]; then error="no destination address"; return 1 ; fi
+  
+  for proto in $protos
+  do
+    if [ -n "$4" ]
+    then
+      dport=$(echo $4 | awk '/^[0-9]+(\-[0-9]+)?$/')
+      if [ -z "$dport" ]; then error="invalid destination port"; return 1; fi
+      dest=$daddr:$dport
+      dport2=$(echo $dport | awk '{split($1, ports, "-"); if (ports[2] != "") print ports[1] ":" ports[2]; else print ports[1]}')
+    else
+      dest=$daddr
+      dport2=$sport
+    fi
+      
+    $IPTABLES -t nat -A PREROUTING -p $proto -d $EXTIP --dport $sport -j DNAT --to $dest
+    
+    if [ "$FORWARD_FILTERING" = "true" -a ! "$FORWARD_POLICY" = "light" ]
+    then
+      $IPTABLES -A PORTFW -i $EXTIF -d $daddr -p $proto --dport $dport2 -j ACCEPT
+
+      if [ "$FORWARD_POLICY" = "strong" ]
+      then
+        $IPTABLES -A PORTFW -o $EXTIF -s $daddr -p $proto --sport $dport2 -j ACCEPT
+      fi
+     fi
+  done
+
+  return 0  
+}
+
+
+###############################################################
+# Firewall functions
+###############################################################
+
+#
+# Start the firewall
+#
+
+start_fw() {
+  #
+  # Load needed modules
+  #
+  
+  for ((i=0; i < MODULESENTRIES; i++))
+  do
+    modprobe -a ${MODULES[i]}
+  done
+  
+  #
+  # Get internal/external IPs/Netmasks
+  #
+  
+  #INTIP=$(ifconfig $INTIF | fgrep 'inet' | cut -d : -f 2 | cut -d " " -f 1)
+  #INTNM=$(ifconfig $INTIF | fgrep 'Mask' | cut -d : -f 4)
+  #INTNET="$INTIP/$INTNM"
+  
+  EXTIP=$(ifconfig $EXTIF 2> /dev/null | fgrep 'inet' | cut -d : -f 2 | cut -d " " -f 1)
+
+  #
+  # Reset the firewall
+  #
+ 
+  reset_tables
+    
+  #
+  # Set some standard sysctl options
+  #
+  
+  # set ip_dynaddr algorithm if we have a dynamic ip
+  if [ "$DYNIP" = "true" ]; then echo 1 > /proc/sys/net/ipv4/ip_dynaddr; fi
+  
+  # disable ip spoofing
+  echo 1 > /proc/sys/net/ipv4/conf/all/rp_filter
+
+  # don't respond to broadcast pings
+  echo 1 > /proc/sys/net/ipv4/icmp_echo_ignore_broadcasts
+
+  # enable syncookies
+  #echo 1 > /proc/sys/net/ipv4/tcp_syncookies
+  
+  # kill redirects
+  echo 0 > /proc/sys/net/ipv4/conf/all/accept_redirects
+  
+  # enable bad error message protection
+  echo 1 > /proc/sys/net/ipv4/icmp_ignore_bogus_error_responses
+  
+  #
+  # Input filtering
+  #
+  
+  if [ "$INPUT_FILTERING" = "true" ]
+  then
+    $IPTABLES -P INPUT DROP
+    $IPTABLES -A INPUT -i lo -j ACCEPT     # local loop-back interface is always allowed (commenting this out WILL cause problems)
+  else
+    $IPTABLES -P INPUT ACCEPT
+  fi
+
+  #
+  # Output filtering
+  #
+
+  if [ "$OUTPUT_FILTERING" = "true" ]
+  then
+    $IPTABLES -P OUTPUT DROP
+    $IPTABLES -A OUTPUT -o lo -j ACCEPT    # local loop-back interface is always allowed (commenting this out WILL cause problems)
+  else
+    $IPTABLES -P OUTPUT ACCEPT
+  fi
+  
+  #
+  # Forward filtering
+  #
+  
+  if [ "$FORWARD_FILTERING" = "true" ]
+  then
+    $IPTABLES -P FORWARD DROP
+  else
+    $IPTABLES -P FORWARD ACCEPT
+  fi
+  
+  #
+  # ALLOW/DENY/REJECT-Chains (especially for logging)
+  #
+  
+  if [ "$INTERNALALLOWTCPENTRIES" -gt 0 -o "$EXTERNALALLOWTCPENTRIES" -gt 0 -o "$FORWARDALLOWTCPENTRIES" -gt 0 -o "$INTERNALALLOWUDPENTRIES" -gt 0 -o "$EXTERNALALLOWUDPENTRIES" -gt 0 -o "$FORWARDALLOWUDPENTRIES" -gt 0 ]
+  then
+    $IPTABLES -N PALLOW
+    $IPTABLES -A PALLOW -j ACCEPT
+  fi
+  
+  if [ "$INTERNALDENYTCPENTRIES" -gt 0 -o "$EXTERNALDENYTCPENTRIES" -gt 0 -o "$FORWARDDENYTCPENTRIES" -gt 0 -o "$INTERNALDENYUDPENTRIES" -gt 0 -o "$EXTERNALDENYUDPENTRIES" -gt 0 -o "$FORWARDDENYUDPENTRIES" -gt 0 ]
+  then
+    $IPTABLES -N PDENY
+    $IPTABLES -A PDENY -j DROP
+  fi
+  
+  if [ "$INTERNALREJECTTCPENTRIES" -gt 0 -o "$EXTERNALREJECTTCPENTRIES" -gt 0 -o "$FORWARDREJECTTCPENTRIES" -gt 0 -o "$INTERNALREJECTUDPENTRIES" -gt 0 -o "$EXTERNALREJECTUDPENTRIES" -gt 0 -o "$FORWARDREJECTUDPENTRIES" -gt 0 ]
+  then
+    $IPTABLES -N PREJECT
+    $IPTABLES -A PREJECT -p tcp -j REJECT --reject-with tcp-reset
+    $IPTABLES -A PREJECT -p udp -j REJECT --reject-with icmp-port-unreachable
+    $IPTABLES -A PREJECT -j REJECT
+  fi
+
+  #
+  # ICMP handling
+  #
+
+  if [ "$INPUT_FILTERING" == "true" -a \( "$INTERNAL_ICMP"=="filter" -o "$EXTERNAL_ICMP"=="filter" \) ]
+  then
+    $IPTABLES -N ICMPIN
+    $IPTABLES -A ICMPIN -p icmp --icmp-type echo-request -j ACCEPT
+    $IPTABLES -A ICMPIN -p icmp --icmp-type redirect -j DROP
+    $IPTABLES -A ICMPIN -p icmp --icmp-type timestamp-request -j DROP
+    $IPTABLES -A ICMPIN -p icmp --icmp-type timestamp-reply -j DROP
+    $IPTABLES -A ICMPIN -p icmp --icmp-type address-mask-request -j DROP
+    $IPTABLES -A ICMPIN -p icmp --icmp-type address-mask-reply -j DROP
+    $IPTABLES -A ICMPIN -p icmp -j ACCEPT
+    
+    case "$INTERNAL_ICMP" in
+      filter)
+        $IPTABLES -A INPUT -p icmp -i $INTIF -j ICMPIN
+        ;;
+      deny)
+        $IPTABLES -A INPUT -p icmp -i $INTIF -j DROP
+        ;;
+    esac
+    
+    case "$EXTERNAL_ICMP" in
+      filter)
+        $IPTABLES -A INPUT -p icmp -i $EXTIF -j ICMPIN
+        ;;
+      deny)
+        $IPTABLES -A INPUT -p icmp -i $EXTIF -j DROP
+        ;;
+    esac
+  fi
+  
+  if [ "$OUTPUT_FILTERING" == "true" -a \( "$INTERNAL_ICMP"=="filter" -o "$EXTERNAL_ICMP"=="filter" \) ]
+  then
+    $IPTABLES -N ICMPOUT
+    $IPTABLES -A ICMPOUT -p icmp --icmp-type redirect -j DROP
+    $IPTABLES -A ICMPOUT -p icmp --icmp-type parameter-problem -j DROP
+    $IPTABLES -A ICMPOUT -p icmp --icmp-type timestamp-request -j DROP
+    $IPTABLES -A ICMPOUT -p icmp --icmp-type timestamp-reply -j DROP
+    $IPTABLES -A ICMPOUT -p icmp --icmp-type address-mask-request -j DROP
+    $IPTABLES -A ICMPOUT -p icmp --icmp-type address-mask-reply -j DROP
+    $IPTABLES -A ICMPOUT -p icmp -j ACCEPT
+   
+    case "$INTERNAL_ICMP" in
+      filter)
+        $IPTABLES -A OUTPUT -p icmp -o $INTIF -j ICMPOUT
+        ;;
+      deny)
+        $IPTABLES -A OUTPUT -p icmp -o $INTIF -j DROP
+        ;;
+    esac
+     
+    case "$EXTERNAL_ICMP" in
+      filter)
+        $IPTABLES -A OUTPUT -p icmp -o $EXTIF -j ICMPOUT
+        ;;
+      deny)
+        $IPTABLES -A OUTPUT -p icmp -o $EXTIF -j DROP
+        ;;
+    esac
+  fi
+  
+  #
+  # Special allowed ports
+  #
+  
+  for ((i=0; i < INTERNALALLOWTCPENTRIES; i++))
+  do
+    $IPTABLES -A INPUT -i $INTIF -p tcp --dport ${INTERNALALLOWTCP[i]} -j PALLOW
+  done
+
+  for ((i=0; i < INTERNALALLOWUDPENTRIES; i++))
+  do
+    $IPTABLES -A INPUT -i $INTIF -p udp --dport ${INTERNALALLOWUDP[i]} -j PALLOW
+  done
+ 
+  for ((i=0; i < EXTERNALALLOWTCPENTRIES; i++))
+  do
+    $IPTABLES -A INPUT -i $EXTIF -p tcp --dport ${EXTERNALALLOWTCP[i]} -j PALLOW
+  done
+
+  for ((i=0; i < EXTERNALALLOWUDPENTRIES; i++))
+  do
+    $IPTABLES -A INPUT -i $EXTIF -p udp --dport ${EXTERNALALLOWUDP[i]} -j PALLOW
+  done
+  
+  for ((i=0; i < FORWARDALLOWTCPENTRIES; i++))
+  do
+    $IPTABLES -A FORWARD -i $INTIF -p udp --dport ${FORWARDALLOWTCP[i]} -j PALLOW
+    $IPTABLES -A FORWARD -o $EXTIF -p udp --sport ${FORWARDALLOWTCP[i]} -j PALLOW
+  done
+  
+  for ((i=0; i < FORWARDALLOWTCPENTRIES; i++))
+  do
+    $IPTABLES -A FORWARD -i $INTIF -p udp --dport ${FORWARDALLOWUDP[i]} -j PALLOW
+    $IPTABLES -A FORWARD -o $EXTIF -p udp --sport ${FORWARDALLOWUDP[i]} -j PALLOW
+  done
+ 
+  #
+  # Special denied ports
+  #
+  
+  for ((i=0; i < INTERNALDENYTCPENTRIES; i++))
+  do
+    $IPTABLES -A INPUT -i $INTIF -p tcp --dport ${INTERNALDENYTCP[i]} -j PDENY
+  done
+
+  for ((i=0; i < INTERNDENYUDPENTRIES; i++))
+  do
+    $IPTABLES -A INPUT -i $INTIF -p udp --dport ${INTERNALDENYUDP[i]} -j PDENY
+  done
+ 
+  for ((i=0; i < EXTERNALDENYTCPENTRIES; i++))
+  do
+    $IPTABLES -A INPUT -i $EXTIF -p tcp --dport ${EXTERNALDENYTCP[i]} -j PDENY
+  done
+
+  for ((i=0; i < EXTERNALDENYUDPENTRIES; i++))
+  do
+    $IPTABLES -A INPUT -i $EXTIF -p udp --dport ${EXTERNALDENYUDP[i]} -j PDENY
+  done
+  
+  for ((i=0; i < FORWARDDENYTCPENTRIES; i++))
+  do
+    $IPTABLES -A FORWARD -i $INTIF -p udp --dport ${FORWARDDENYTCP[i]} -j PDENY
+    $IPTABLES -A FORWARD -o $EXTIF -p udp --sport ${FORWARDDENYTCP[i]} -j PDENY
+  done
+  
+  for ((i=0; i < FORWARDDENYTCPENTRIES; i++))
+  do
+    $IPTABLES -A FORWARD -i $INTIF -p udp --dport ${FORWARDDENYUDP[i]} -j PDENY
+    $IPTABLES -A FORWARD -o $EXTIF -p udp --sport ${FORWARDDENYUDP[i]} -j PDENY
+  done
+
+  #
+  # Special rejected ports
+  #
+
+  for ((i=0; i < INTERNALREJECTTCPENTRIES; i++))
+  do
+    $IPTABLES -A INPUT -i $INTIF -p tcp --dport ${INTERNALREJECTTCP[i]} -j PREJECT
+  done
+
+  for ((i=0; i < INTERNREJECTUDPENTRIES; i++))
+  do
+    $IPTABLES -A INPUT -i $INTIF -p udp --dport ${INTERNALREJECTUDP[i]} -j PREJECT
+  done
+ 
+  for ((i=0; i < EXTERNALREJECTTCPENTRIES; i++))
+  do
+    $IPTABLES -A INPUT -i $EXTIF -p tcp --dport ${EXTERNALREJECTTCP[i]} -j PREJECT
+  done
+
+  for ((i=0; i < EXTERNALREJECTUDPENTRIES; i++))
+  do
+    $IPTABLES -A INPUT -i $EXTIF -p udp --dport ${EXTERNALREJECTUDP[i]} -j PREJECT
+  done
+  
+  for ((i=0; i < FORWARDREJECTTCPENTRIES; i++))
+  do
+    $IPTABLES -A FORWARD -i $INTIF -p udp --dport ${FORWARDREJECTTCP[i]} -j PREJECT
+    $IPTABLES -A FORWARD -o $EXTIF -p udp --sport ${FORWARDREJECTTCP[i]} -j PREJECT
+  done
+  
+  for ((i=0; i < FORWARDREJECTTCPENTRIES; i++))
+  do
+    $IPTABLES -A FORWARD -i $INTIF -p udp --dport ${FORWARDREJECTUDP[i]} -j PREJECT
+    $IPTABLES -A FORWARD -o $EXTIF -p udp --sport ${FORWARDREJECTUDP[i]} -j PREJECT
+  done
+  
+  #
+  # Internal policy
+  #
+  
+  case "$INTERNAL_POLICY" in
+    light)
+      #
+      # light policy: allow every packet to pass through
+      #
+      
+      if [ "$INPUT_FILTERING" = "true" ]; then $IPTABLES -A INPUT -i $INTIF -j ACCEPT; fi
+      if [ "$OUTPUT_FILTERING" = "true" ]; then $IPTABLES -A OUTPUT -o $INTIF -j ACCEPT; fi
+      ;;
+    medium)
+      #
+      # medium policy: allow valid connections out and only existing and related ones in
+      #
+
+      if [ "$INPUT_FILTERING" = "true" ]; then $IPTABLES -A INPUT -i $INTIF -m state --state ESTABLISHED,RELATED -j ACCEPT; fi
+      if [ "$OUTPUT_FILTERING" = "true" ]; then $IPTABLES -A OUTPUT -o $INTIF -m sate --state NEW,ESTABLISHED,RELATED -j ACCEPT; fi
+      ;;
+    strong)
+      #
+      # strong policy: only authorized connections are allowed
+      #
+      
+      #if [ "$INPUT_FILTERING" = "true" ]; then $IPTABLES -A INPUT -i $INTIF -m state --state ESTABLISHED,RELATED -j ACCEPT; fi
+      #if [ "$OUTPUT_FILTERING" = "true" ]; then $IPTABLES -A OUTPUT -o $INTIF -m state --state ESTABLISHED,RELATED -j ACCEPT; fi
+      ;;
+  esac
+
+  #
+  # External policy
+  #
+  
+  case "$EXTERNAL_POLICY" in
+    light)
+      if [ "$INPUT_FILTERING" = "true" ]; then $IPTABLES -A INPUT -i $EXTIF -j ACCEPT; fi
+      if [ "$OUTPUT_FILTERING" = "true" ]; then $IPTABLES -A OUTPUT -o $EXTIF -j ACCEPT; fi
+      ;;
+    medium)
+      if [ "$INPUT_FILTERING" = "true" ]; then $IPTABLES -A INPUT -i $EXTIF -m state --state ESTABLISHED,RELATED -j ACCEPT; fi
+      if [ "$OUTPUT_FILTERING" = "true" ]; then $IPTABLES -A OUTPUT -o $EXTIF -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT; fi
+      ;;
+    strong)
+      #if [ "$INPUT_FILTERING" = "true" ]; then $IPTABLES -A INPUT -i $EXTIF -m state --state ESTABLISHED,RELATED -j ACCEPT; fi
+      #if [ "$OUTPUT_FILTERING" = "true" ]; then $IPTABLES -A OUTPUT -o $EXTIF -m state --state ESTABLISHED,RELATED -j ACCEPT; fi
+      ;;
+  esac
+
+  #
+  # Forward policy
+  #
+  
+  case "$FORWARD_POLICY" in
+    light)
+      if [ "$FORWARD_FILTERING" = "true" ]
+      then
+        $IPTABLES -A FORWARD -i $INTIF -o $EXTIF -j ACCEPT
+	$IPTABLES -A FORWARD -i $EXTIF -o $INTIF -j ACCEPT
+      fi
+      ;;
+    medium)
+      if [ "$FORWARD_FILTERING" = "true" ]
+      then
+        $IPTABLES -A FORWARD -i $INTIF -o $EXTIF -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT
+	$IPTABLES -A FORWARD -i $EXTIF -o $INTIF -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+	if [ "$ROUTING" = "true" -a -n "$EXTIP" ]
+	then
+  	  $IPTABLES -N PORTFW
+	  $IPTABLES -A FORWARD -j PORTFW
+	fi
+      fi
+      ;;
+    strong)
+      # drop everything except allowed ports
+      if [ "$FORWARD_FILTERING" = "true" ]
+      then
+        if [ "$ROUTING" = "true" -a -n "$EXTIP" ]
+        then
+          $IPTABLES -N PORTFW
+          $IPTABLES -A FORWARD -j PORTFW
+        fi
+      fi
+      ;;
+  esac
+
+  #
+  # Routing
+  #
+  
+  if [ "$ROUTING" = "true" -a -n "$EXTIP" ]
+  then
+    echo 1 > /proc/sys/net/ipv4/ip_forward
+
+    if [ "$DYNIP" = "true" ]
+    then
+      $IPTABLES -t nat -A POSTROUTING -o $EXTIF -j MASQUERADE
+    else
+      $IPTABLES -t nat -A POSTROUTING -o $EXTIF -j SNAT
+    fi
+
+    for ((i=0; i < NATENTRIES; i++))
+    do
+      portfw ${NATTABLE[i]} || echo "  Syntax error in nat/portfw[$(($i + 1))]: $error"
+    done
+  else
+    echo 0 > /proc/sys/net/ipv4/ip_forward
+  fi
+}
+
+stop_fw() {
+  $IPTABLES -P INPUT ACCEPT
+  $IPTABLES -P OUTPUT ACCEPT
+  $IPTABLES -P FORWARD ACCEPT
+ 
+  reset_tables
+}
+
+panic_fw() {
+  $IPTABLES -P INPUT DROP
+  $IPTABLES -P OUTPUT DROP
+  $IPTABLES -P FORWARD DROP
+  
+  reset_tables
+}
+
+remap_fw() {
+  if [ ! "$ROUTING" = "true" ]
+  then
+    echo "ERROR: You must enable routing for port forwarding."
+    return 1
+  fi
+  
+  $IPTABLES -t nat -F PREROUTING
+  
+  if ! $IPTABLES -F PORTFW > /dev/null 2> /dev/null
+  then
+    start_fw
+    return 0
+  fi
+  
+  EXTIP=$(ifconfig $EXTIF 2> /dev/null | fgrep 'inet' | cut -d : -f 2 | cut -d " " -f 1)
+
+  if [ -z "$EXTIP" ]
+  then
+    return
+  fi
+  
+  for ((i=0; i < NATENTRIES; i++))
+  do
+    portfw ${NATTABLE[i]} || echo "  Syntax error in nat/portfw[$(($i + 1))]: $error"
+  done
+}
+
+###############################################################
+# Entry point
+###############################################################
+
+case "$1" in
+  start)
+    echo -n "Starting Routing Firewall: "
+    load_config || exit
+    start_fw || exit
+    echo "done."
+    ;;
+  stop)
+    echo -n "Stopping Routing Firewall: "
+    stop_fw || exit
+    echo "done."
+    ;;
+  panic)
+    echo -n "Routing Firewall PANIC-Mode: "
+    panic_fw
+    echo "set."
+    ;;
+  remap)
+    echo -n "Routing Firewall remapping ports: "
+    load_config || exit
+    remap_fw || exit
+    echo "done."
+    ;;
+  restart|reload|force-reload)
+    echo -n "Restarting Routing Firewall: "
+    load_config || exit
+    start_fw || exit
+    echo "done."
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|panic|remap|restart|reload|force-reload}" >&2
+esac

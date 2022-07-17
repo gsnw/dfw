@@ -1,0 +1,22 @@
+DFW -- Debian Firewall
+
+Version: 0.1
+Page: GSNW [ http://www.gsnw.de/ ]
+Autor: German Service Network
+Mail: support {at} gsnw.de
+License: GNU General Public License [ http://www.gnu.org/licenses/gpl.html ]
+
+$install_directory = /usr/local/src
+
+Installation:
+	cd {$install_directory}/
+	tar xvzf dfw-0.1.tar.gz
+	cd dfw/
+	make install
+
+Konfiguration:
+	vi /etc/network/dfw.conf
+
+Uninstall:
+	cd {$install_directory}/dfw/
+	make uninstall
